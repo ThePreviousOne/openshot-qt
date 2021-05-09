@@ -96,19 +96,17 @@ class PropertiesModel(updates.UpdateInterface, QObject):
         self.selected = []
         self.filter_base_properties = []
 
-        timeline = get_app().window.timeline_sync.timeline
-        item = get_query_object(item_id, item_type)
-        if item_type == "effect":
-            # Filter out basic properties, since this is an effect on a clip
-            self.filter_base_properties = ["position", "layer", "start", "end", "duration"]
-            if item:
-                # We also need the parent
-                self.selected_parent = item.ParentClip()
-
+        item = PropertiesModel.get_lib_object(item_id, item_type)
         if not item:
             # Clear model
             self.update_model(get_app().window.txtPropertyFilter.text())
             return
+
+        if item_type == "effect":
+            # Filter out basic properties, since this is an effect on a clip
+            self.filter_base_properties = ["position", "layer", "start", "end", "duration"]
+            # We also need the parent
+            self.selected_parent = item.ParentClip()
 
         self.selected.append((item, item_type))
         log.debug("Update %s item %s", item_type, item_id)
@@ -159,7 +157,23 @@ class PropertiesModel(updates.UpdateInterface, QObject):
             # Update the model data
             if reload_model:
                 self.update_model(get_app().window.txtPropertyFilter.text())
-
+                
+    @staticmethod
+    def get_lib_object(i_id: str, i_type: str) -> object:
+        """Find the openshot object for a timeline item, by ID"""
+        try:
+            timeline = get_app().window.timeline_sync.timeline
+            if i_type == "clip":
+                return timeline.GetClip(i_id)
+            if i_type == "transition":
+                return timeline.GetEffect(i_id)
+            if i_type == "effect":
+                return timeline.GetClipEffect(i_id)
+            raise RuntimeError("Unknown item type")
+        except Exception:
+            log.warning("Exception in get_lib_object", exc_info=1)
+            return None
+    
     @staticmethod
     def get_query_object(q_id: str, q_type: str) -> QueryObject:
         """Find the query object for a timeline item, by ID"""
