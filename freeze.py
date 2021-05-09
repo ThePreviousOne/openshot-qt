@@ -91,7 +91,7 @@ python_packages = ["os",
                    "requests",
                    "zmq",
                    "webbrowser",
-                   "json"
+                   "json",
                    ]
 
 # Modules to include
@@ -175,7 +175,7 @@ for share_name in ["install-x64", "install-x86"]:
             git_log_filepath = os.path.join(share_path, git_log_filename)
             if os.path.isfile(git_log_filepath):
                 src_files.append((git_log_filepath, "settings/%s" % git_log_filename))
-                if os.path.splitext(git_log_filepath)[1] == "":
+                if os.path.splitext(git_log_filepath)[1] == ".env":
                     # No extension, parse version info
                     version_info.update(parse_version_info(git_log_filepath))
 
@@ -203,7 +203,11 @@ if sys.platform == "win32":
     src_files.append((os.path.join(PATH, "installer", "launch-win.bat"), "launch-win.bat"))
 
     # Add additional package
-    python_packages.append('idna')
+    python_packages.extend([
+        "idna",
+        "OpenGL",
+        "OpenGL_accelerate",
+    ])
 
     # Manually add zmq dependency (windows does not freeze it correctly)
     import zmq

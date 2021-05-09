@@ -29,7 +29,6 @@
 
 import os
 import shutil
-import sys
 import webbrowser
 from copy import deepcopy
 from time import sleep
@@ -46,12 +45,11 @@ from PyQt5.QtWidgets import (
     QMessageBox, QDialog, QFileDialog, QInputDialog,
     QAction, QActionGroup, QSizePolicy,
     QStatusBar, QToolBar, QToolButton,
-    QLineEdit, QSlider, QLabel, QComboBox, QTextEdit
+    QLineEdit, QComboBox, QTextEdit
 )
 
-from classes import exceptions, info, settings, qt_types, ui_util, updates
+from classes import exceptions, info, qt_types, ui_util, updates
 from classes.app import get_app
-from classes.conversion import zoomToSeconds, secondsToZoom
 from classes.exporters.edl import export_edl
 from classes.exporters.final_cut_pro import export_xml
 from classes.importers.edl import import_edl
@@ -109,6 +107,13 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
     FileUpdated = pyqtSignal(str)
     CaptionTextUpdated = pyqtSignal(str, object)
     CaptionTextLoaded = pyqtSignal(str, object)
+    TimelineZoom = pyqtSignal(float)     # Signal to zoom into timeline from zoom slider
+    TimelineScrolled = pyqtSignal(list)  # Scrollbar changed signal from timeline
+    TimelineScroll = pyqtSignal(float)   # Signal to force scroll timeline to specific point
+    TimelineCenter = pyqtSignal()        # Signal to force center scroll on playhead
+    SelectionAdded = pyqtSignal(str, str, bool)  # Signal to add a selection
+    SelectionRemoved = pyqtSignal(str, str)      # Signal to remove a selection
+    SelectionChanged = pyqtSignal()      # Signal after selections have been changed (added/removed)
 
     # Docks are closable, movable and floatable
     docks_frozen = False
@@ -383,7 +388,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
         try:
             # Update history in project data
-            s = settings.get_settings()
+            s = app.get_settings()
             app.updates.save_history(app.project, s.get("history-limit"))
 
             # Save project to file
@@ -570,7 +575,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
         import time
 
         app = get_app()
-        s = settings.get_settings()
+        s = app.get_settings()
 
         # Get current filepath (if any)
         file_path = app.project.current_filepath
@@ -799,7 +804,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
             log.info('Preferences add cancelled')
 
         # Save settings
-        s = settings.get_settings()
+        s = get_app().get_settings()
         s.save()
 
         # Restore normal cursor
@@ -1007,7 +1012,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
         # Save current cache object and create a new CacheMemory object (ignore quality and scale prefs)
         old_cache_object = self.cache_object
-        new_cache_object = openshot.CacheMemory(settings.get_settings().get("cache-limit-mb") * 1024 * 1024)
+        new_cache_object = openshot.CacheMemory(app.get_settings().get("cache-limit-mb") * 1024 * 1024)
         self.timeline_sync.timeline.SetCache(new_cache_object)
 
         # Set MaxSize to full project resolution and clear preview cache so we get a full resolution frame
@@ -1409,14 +1414,14 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def getShortcutByName(self, setting_name):
         """ Get a key sequence back from the setting name """
-        s = settings.get_settings()
+        s = get_app().get_settings()
         shortcut = QKeySequence(s.get(setting_name))
         return shortcut
 
     def getAllKeyboardShortcuts(self):
         """ Get a key sequence back from the setting name """
         keyboard_shortcuts = []
-        all_settings = settings.get_settings()._data
+        all_settings = get_app().get_settings()._data
         for setting in all_settings:
             if setting.get('category') == 'Keyboard':
                 keyboard_shortcuts.append(setting)
@@ -1869,10 +1874,10 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
                 m.delete()
 
     def actionTimelineZoomIn_trigger(self):
-        self.sliderZoom.setValue(self.sliderZoom.value() - self.sliderZoom.singleStep())
+        self.sliderZoomWidget.zoomIn()
 
     def actionTimelineZoomOut_trigger(self):
-        self.sliderZoom.setValue(self.sliderZoom.value() + self.sliderZoom.singleStep())
+        self.sliderZoomWidget.zoomOut()
 
     def actionFullscreen_trigger(self):
         # Toggle fullscreen state (current state mask XOR WindowFullScreen)
@@ -1910,7 +1915,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
         # Get settings
         app = get_app()
-        s = settings.get_settings()
+        s = app.get_settings()
 
         # Files
         if app.context_menu_object == "files":
@@ -1938,7 +1943,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
         # Get settings
         app = get_app()
-        s = settings.get_settings()
+        s = app.get_settings()
 
         # Files
         if app.context_menu_object == "files":
@@ -2137,7 +2142,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def actionTutorial_trigger(self):
         """ Show tutorial again """
-        s = settings.get_settings()
+        s = get_app().get_settings()
 
         # Clear tutorial settings
         s.set("tutorial_enabled", True)
@@ -2256,7 +2261,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
             log.info('addSelection: item_id: {}, item_type: {}, clear_existing: {}'.format(
                 item_id, item_type, clear_existing))
 
-        s = settings.get_settings()
+        s = get_app().get_settings()
 
         # Clear existing selection (if needed)
         if clear_existing:
@@ -2286,6 +2291,9 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
             self.show_property_id = item_id
             self.show_property_type = item_type
             self.show_property_timer.start()
+
+        # Notify UI that selection has been potentially changed
+        self.selection_timer.start()
 
     # Remove from the selected items
     def removeSelection(self, item_id, item_type):
@@ -2318,8 +2326,14 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
             self.show_property_id = self.selected_effects[0]
             self.show_property_type = item_type
 
-        # Change selected item in properties view
+        # Change selected item
         self.show_property_timer.start()
+        self.selection_timer.start()
+
+    def emit_selection_signal(self):
+        """Emit a signal for selection changed. Callback for selection timer."""
+        # Notify UI that selection has been potentially changed
+        self.SelectionChanged.emit()
 
     def selected_files(self):
         """ Return a list of File objects for the Project Files dock's selection """
@@ -2339,7 +2353,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     # Update window settings in setting store
     def save_settings(self):
-        s = settings.get_settings()
+        s = get_app().get_settings()
 
         # Save window state and geometry (saves toolbar and dock locations)
         s.set('window_state_v2', qt_types.bytes_to_str(self.saveState()))
@@ -2348,7 +2362,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     # Get window settings from setting store
     def load_settings(self):
-        s = settings.get_settings()
+        s = get_app().get_settings()
 
         # Window state and geometry (also toolbar, dock locations and frozen UI state)
         if s.get('window_state_v2'):
@@ -2371,7 +2385,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def load_recent_menu(self):
         """ Clear and load the list of recent menu items """
-        s = settings.get_settings()
+        s = get_app().get_settings()
         _ = get_app()._tr  # Get translation function
 
         # Get list of recent projects
@@ -2407,7 +2421,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def remove_recent_project(self, file_path):
         """Remove a project from the Recent menu if OpenShot can't find it"""
-        s = settings.get_settings()
+        s = get_app().get_settings()
         recent_projects = s.get("recent_projects")
         if file_path in recent_projects:
             recent_projects.remove(file_path)
@@ -2420,7 +2434,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def clear_recents_clicked(self):
         """Clear all recent projects"""
-        s = settings.get_settings()
+        s = get_app().get_settings()
         s.set("recent_projects", [])
 
         # Reload recent project list
@@ -2550,7 +2564,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
         # Hook up caption editor signal
         self.captionTextEdit.textChanged.connect(self.captionTextEdit_TextChanged)
-        self.caption_save_timer = QTimer()
+        self.caption_save_timer = QTimer(self)
         self.caption_save_timer.setInterval(100)
         self.caption_save_timer.setSingleShot(True)
         self.caption_save_timer.timeout.connect(self.caption_editor_save)
@@ -2558,27 +2572,16 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
         self.caption_model_row = None
 
         # Get project's initial zoom value
-        initial_scale = get_app().project.get("scale") or 15
-        # Round non-exponential scale down to next lowest power of 2
-        initial_zoom = secondsToZoom(initial_scale)
+        initial_scale = get_app().project.get("scale") or 15.0
 
-        # Setup Zoom slider
-        self.sliderZoom = QSlider(Qt.Horizontal, self)
-        self.sliderZoom.setPageStep(1)
-        self.sliderZoom.setRange(0, 30)
-        self.sliderZoom.setValue(initial_zoom)
-        self.sliderZoom.setInvertedControls(True)
-        self.sliderZoom.resize(100, 16)
-
-        self.zoomScaleLabel = QLabel(
-            _("{} seconds").format(zoomToSeconds(self.sliderZoom.value()))
-        )
+        # Setup Zoom Slider widget
+        from windows.views.zoom_slider import ZoomSlider
+        self.sliderZoomWidget = ZoomSlider(self)
+        self.sliderZoomWidget.setMinimumSize(200, 20)
+        self.sliderZoomWidget.setZoomFactor(initial_scale)
 
         # add zoom widgets
-        self.timelineToolbar.addAction(self.actionTimelineZoomIn)
-        self.timelineToolbar.addWidget(self.sliderZoom)
-        self.timelineToolbar.addAction(self.actionTimelineZoomOut)
-        self.timelineToolbar.addWidget(self.zoomScaleLabel)
+        self.timelineToolbar.addWidget(self.sliderZoomWidget)
 
         # Add timeline toolbar to web frame
         self.frameWeb.addWidget(self.timelineToolbar)
@@ -2667,7 +2670,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
     def InitCacheSettings(self):
         """Set the correct cache settings for the timeline"""
         # Load user settings
-        s = settings.get_settings()
+        s = get_app().get_settings()
         log.info("InitCacheSettings")
         log.info("cache-mode: %s" % s.get("cache-mode"))
         log.info("cache-limit-mb: %s" % s.get("cache-limit-mb"))
@@ -2707,7 +2710,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def initModels(self):
         """Set up model/view classes for MainWindow"""
-        s = settings.get_settings()
+        s = get_app().get_settings()
 
         # Setup files tree and list view (both share a model)
         self.files_model = FilesModel()
@@ -2779,7 +2782,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
         _ = app._tr
 
         # Load user settings for window
-        s = settings.get_settings()
+        s = app.get_settings()
         self.recent_menu = None
 
         # Track metrics
@@ -2866,10 +2869,18 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
         # to update the property model hundreds of times)
         self.show_property_id = None
         self.show_property_type = None
-        self.show_property_timer = QTimer()
+        self.show_property_timer = QTimer(self)
         self.show_property_timer.setInterval(100)
         self.show_property_timer.setSingleShot(True)
         self.show_property_timer.timeout.connect(self.show_property_timeout)
+
+        # Selection timer
+        # Timer to use a delay before emitting selection signal (to prevent a mass selection from trying
+        # to update the zoom slider widget hundreds of times)
+        self.selection_timer = QTimer(self)
+        self.selection_timer.setInterval(100)
+        self.selection_timer.setSingleShot(True)
+        self.selection_timer.timeout.connect(self.emit_selection_signal)
 
         # Setup video preview QWidget
         self.videoPreview = VideoWidget()
@@ -2886,6 +2897,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
         self.preview_parent = PreviewParent()
         self.preview_parent.Init(self, self.timeline_sync.timeline, self.videoPreview)
         self.preview_thread = self.preview_parent.worker
+        self.sliderZoomWidget.connect_playback()
 
         # Set pause callback
         self.PauseSignal.connect(self.handlePausedVideo)
@@ -2955,6 +2967,10 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
         # Connect OpenProject Signal
         self.OpenProjectSignal.connect(self.open_project)
+
+        # Connect Selection signals
+        self.SelectionAdded.connect(self.addSelection)
+        self.SelectionRemoved.connect(self.removeSelection)
 
         # Show window
         if self.mode != "unittest":

@@ -97,23 +97,17 @@ class PropertiesModel(updates.UpdateInterface, QObject):
         self.filter_base_properties = []
 
         timeline = get_app().window.timeline_sync.timeline
-        if item_type == "clip":
-            item = timeline.GetClip(item_id)
-        elif item_type == "transition":
-            item = timeline.GetEffect(item_id)
-        elif item_type == "effect":
-            item = timeline.GetClipEffect(item_id)
+        item = get_query_object(item_id, item_type)
+        if item_type == "effect":
             # Filter out basic properties, since this is an effect on a clip
             self.filter_base_properties = ["position", "layer", "start", "end", "duration"]
             if item:
                 # We also need the parent
                 self.selected_parent = item.ParentClip()
-        else:
-            item = None
 
         if not item:
             # Clear model
-            self.update_model()
+            self.update_model(get_app().window.txtPropertyFilter.text())
             return
 
         self.selected.append((item, item_type))
