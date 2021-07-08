@@ -217,7 +217,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def create_lock_file(self):
         """Create a lock file"""
-        lock_path = os.path.join(info.USER_PATH, ".lock")
+        lock_path = os.path.join(info.CONFIG_PATH, ".lock")
         # Check if it already exists
         if os.path.exists(lock_path):
             last_log_line = exceptions.libopenshot_crash_recovery() or "No Log Detected"
@@ -246,7 +246,7 @@ class MainWindow(updates.UpdateWatcher, QMainWindow):
 
     def destroy_lock_file(self):
         """Destroy the lock file"""
-        lock_path = os.path.join(info.USER_PATH, ".lock")
+        lock_path = os.path.join(info.CONFIG_PATH, ".lock")
 
         # Remove file (try a few times if failure)
         for attempt in range(5):
